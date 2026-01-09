@@ -1,6 +1,29 @@
 const puppeteer = require('puppeteer');
 const { safeTrack, trackError } = require('./utils/metrics');
 
+// ============================================
+// KONFIGURASI RESIDENTIAL PROXY
+// ============================================
+// Set environment variables berikut untuk menggunakan proxy:
+// PROXY_HOST     - Host proxy (contoh: gate.smartproxy.com)
+// PROXY_PORT     - Port proxy (contoh: 7777)
+// PROXY_USERNAME - Username proxy
+// PROXY_PASSWORD - Password proxy
+// ============================================
+const PROXY_HOST = process.env.PROXY_HOST || '';
+const PROXY_PORT = process.env.PROXY_PORT || '';
+const PROXY_USERNAME = process.env.PROXY_USERNAME || '';
+const PROXY_PASSWORD = process.env.PROXY_PASSWORD || '';
+
+// Cek apakah proxy dikonfigurasi
+const isProxyEnabled = PROXY_HOST && PROXY_PORT;
+
+if (isProxyEnabled) {
+  console.log(`[BROWSER] Proxy enabled: ${PROXY_HOST}:${PROXY_PORT}`);
+} else {
+  console.log('[BROWSER] Proxy not configured, using direct connection');
+}
+
 let browser = null;
 let isLaunching = false;
 let launchPromise = null;
@@ -12,14 +35,14 @@ async function getBrowser() {
   if (browser) {
     return browser;
   }
-  
+
   if (isLaunching) {
     return await launchPromise;
   }
-  
+
   isLaunching = true;
   launchPromise = launchBrowser();
-  
+
   try {
     browser = await launchPromise;
     return browser;
@@ -34,27 +57,36 @@ async function getBrowser() {
  */
 async function launchBrowser() {
   console.log('Launching headless browser...');
-  
+
+  // Build browser args
+  const args = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--disable-gpu',
+    '--window-size=1920,1080',
+  ];
+
+  // Tambahkan proxy server jika dikonfigurasi
+  if (isProxyEnabled) {
+    args.push(`--proxy-server=http://${PROXY_HOST}:${PROXY_PORT}`);
+    console.log(`[BROWSER] Using proxy: http://${PROXY_HOST}:${PROXY_PORT}`);
+  }
+
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--disable-gpu',
-      '--window-size=1920,1080',
-    ],
+    args,
     ignoreHTTPSErrors: true
   });
-  
+
   // Close browser on process exit
   process.on('exit', () => {
     if (browser && browser.process() != null) {
       browser.close();
     }
   });
-  
+
   return browser;
 }
 
@@ -70,17 +102,26 @@ function sleep(ms) {
  */
 async function fetchWithBrowser(url, options = {}) {
   const browser = await getBrowser();
-  
+
   console.log(`Fetching ${url} with puppeteer...`);
   const page = await browser.newPage();
-  
+
   try {
+    // Authenticate proxy jika credentials tersedia
+    if (isProxyEnabled && PROXY_USERNAME && PROXY_PASSWORD) {
+      await page.authenticate({
+        username: PROXY_USERNAME,
+        password: PROXY_PASSWORD
+      });
+      console.log('[BROWSER] Proxy authentication set');
+    }
+
     // Set viewport
     await page.setViewport({ width: 1920, height: 1080 });
-    
+
     // Set user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    
+
     // Set extra headers
     await page.setExtraHTTPHeaders({
       'Accept-Language': 'en-US,en;q=0.9',
@@ -93,13 +134,13 @@ async function fetchWithBrowser(url, options = {}) {
       'Sec-Fetch-User': '?1',
       'Upgrade-Insecure-Requests': '1'
     });
-    
+
     // Navigate to the URL
     const response = await page.goto(url, {
       waitUntil: 'networkidle2',
       timeout: options.timeout || 30000
     });
-    
+
     // Wait for selectors that indicate page has loaded
     const waitForSelectors = options.waitForSelectors || ['body', '.container', '.content', 'h1'];
     let selectorFound = false;
@@ -113,25 +154,25 @@ async function fetchWithBrowser(url, options = {}) {
         console.log(`Selector ${selector} not found`);
       }
     }
-    
+
     // Wait additional time if specified
     if (options.extraWaitTime) {
       console.log(`Waiting additional ${options.extraWaitTime}ms...`);
       await sleep(options.extraWaitTime);
     }
-    
+
     // Get HTML content
     const html = await page.content();
     console.log(`Fetched HTML length: ${html.length}`);
-    
+
     // Track browser fetch performance
-    safeTrack('browser_fetch_success', { 
+    safeTrack('browser_fetch_success', {
       url: url,
       htmlLength: html.length,
       status: response.status(),
-      selectorFound: selectorFound 
+      selectorFound: selectorFound
     });
-    
+
     return {
       html,
       status: response.status(),
