@@ -2,110 +2,60 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+
+// ============================================
+// KONFIGURASI RESIDENTIAL PROXY
+// ============================================
+// Set environment variables berikut untuk menggunakan proxy:
+// PROXY_HOST     - Host proxy (contoh: gate.smartproxy.com)
+// PROXY_PORT     - Port proxy (contoh: 7777)
+// PROXY_USERNAME - Username proxy
+// PROXY_PASSWORD - Password proxy
+// ============================================
+const PROXY_HOST = process.env.PROXY_HOST || '';
+const PROXY_PORT = process.env.PROXY_PORT || '';
+const PROXY_USERNAME = process.env.PROXY_USERNAME || '';
+const PROXY_PASSWORD = process.env.PROXY_PASSWORD || '';
+
+// Buat proxy agent jika dikonfigurasi
+let proxyAgent = null;
+if (PROXY_HOST && PROXY_PORT) {
+  const proxyUrl = PROXY_USERNAME && PROXY_PASSWORD
+    ? `http://${PROXY_USERNAME}:${PROXY_PASSWORD}@${PROXY_HOST}:${PROXY_PORT}`
+    : `http://${PROXY_HOST}:${PROXY_PORT}`;
+  proxyAgent = new HttpsProxyAgent(proxyUrl);
+  console.log(`[LAYARWIBU] Proxy enabled: ${PROXY_HOST}:${PROXY_PORT}`);
+} else {
+  console.log('[LAYARWIBU] Proxy not configured, using direct connection');
+}
 
 const router = express.Router();
-const PROXY = 'https://proxy.liyao.space/------';
-const PROXY_ALT_1 = 'https://cf.depseekelement.workers.dev/------';
-const PROXY_ALT_2 = 'https://cf.depseekelement.workers.dev/------';
 const BASE_URL = 'https://otakudesu.best';
-const PROXY_BASE_URL = PROXY + BASE_URL;
 
 router.use(cors());
 router.use(express.json());
 
-// Helper untuk fetch halaman Otakudesu dengan fallback proxy
+// Helper untuk fetch halaman dengan residential proxy
 async function fetchPage(url) {
-  // Cek apakah URL menggunakan proxy
-  const isProxyUrl = url.includes(PROXY) || url.includes(PROXY_ALT_1) || url.includes(PROXY_ALT_2);
-  let targetUrl = url;
-  
-  // Ekstrak target URL dari proxy yang ada
-  if (url.includes(PROXY)) {
-    targetUrl = url.replace(PROXY, '');
-  } else if (url.includes(PROXY_ALT_1)) {
-    targetUrl = url.replace(PROXY_ALT_1, '').replace(/[?&]source=true(&|$)/, '').replace(/\?$/, '');
-  } else if (url.includes(PROXY_ALT_2)) {
-    targetUrl = url.replace(PROXY_ALT_2, '').replace(/[?&]source=true(&|$)/, '').replace(/\?$/, '');
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+      },
+      timeout: 30000, // 30 detik timeout
+      ...(proxyAgent && { httpsAgent: proxyAgent, httpAgent: proxyAgent })
+    });
+
+    return cheerio.load(response.data);
+  } catch (err) {
+    console.error(`[LAYARWIBU] Error fetch ${url}:`, err.message);
+    throw new Error(`Gagal mengambil data: ${err.message}`);
   }
-  
-  // Jika URL tidak menggunakan proxy, pastikan targetUrl adalah URL lengkap
-  // Jika sudah menggunakan proxy, targetUrl sudah benar (tanpa proxy prefix)
-  
-  // Daftar proxy untuk dicoba (utama dulu, lalu alternatif)
-  const proxyList = [
-    { proxy: PROXY, addSource: false },
-    { proxy: PROXY_ALT_1, addSource: true },
-    { proxy: PROXY_ALT_2, addSource: true }
-  ];
-  
-  let lastError = null;
-  
-  for (const { proxy, addSource } of proxyList) {
-    try {
-      // Jika URL sudah menggunakan proxy, gunakan targetUrl yang sudah diekstrak
-      // Jika tidak, gunakan URL asli sebagai targetUrl
-      let fetchUrl = isProxyUrl ? (proxy + targetUrl) : (proxy + url);
-      
-      // Tambahkan ?source=true untuk proxy alternatif
-      if (addSource) {
-        fetchUrl += (fetchUrl.includes('?') ? '&' : '?') + 'source=true';
-      }
-      
-      const response = await axios.get(fetchUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
-        timeout: 10000 // 10 detik timeout
-      });
-      
-      // Cek apakah response body mengandung error message spesifik
-      const responseText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
-      const errorMessages = [
-        'no config url found',
-        'proxy error',
-        'proxy configuration error',
-        'invalid proxy',
-        'proxy not found'
-      ];
-      
-      // Jika response mengandung error message spesifik, lanjut ke proxy berikutnya
-      // Hanya cek jika response pendek (kemungkinan error page) atau mengandung error spesifik
-      const responseLower = responseText.toLowerCase();
-      const hasError = errorMessages.some(msg => responseLower.includes(msg));
-      
-      if (hasError && (responseText.length < 1000 || responseLower.includes('no config'))) {
-        console.warn(`Proxy ${proxy} mengembalikan error message: ${responseText.substring(0, 200)}`);
-        lastError = new Error(`Proxy error: Response mengandung error message spesifik`);
-        continue;
-      }
-      
-      // Jika berhasil, return hasilnya
-      return cheerio.load(response.data);
-    } catch (err) {
-      lastError = err;
-      const errorMsg = err.response?.data || err.message || 'Unknown error';
-      console.error(`Error fetch dengan proxy ${proxy}:`, errorMsg);
-      
-      // Cek apakah error response mengandung "No config URL found"
-      if (err.response?.data) {
-        const errorText = typeof err.response.data === 'string' 
-          ? err.response.data 
-          : JSON.stringify(err.response.data);
-        if (errorText.toLowerCase().includes('no config url found') || 
-            errorText.toLowerCase().includes('proxy error')) {
-          console.warn(`Proxy ${proxy} gagal dengan error spesifik, mencoba proxy berikutnya...`);
-          continue;
-        }
-      }
-      
-      // Lanjut ke proxy berikutnya
-      continue;
-    }
-  }
-  
-  // Jika semua proxy gagal
-  console.error(`Semua proxy gagal untuk ${url}`);
-  throw new Error(`Gagal mengambil data: ${lastError?.message || 'Semua proxy gagal'}`);
 }
 
 // Helper format image URL (harus cek format Otakudesu)
@@ -115,16 +65,10 @@ function formatImageUrl(imageUrl) {
   return `${BASE_URL}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`;
 }
 
-// Helper untuk hapus prefix proxy di url gambar & link download
+// Helper untuk membersihkan URL (legacy, dipertahankan untuk kompatibilitas)
 function cleanUrl(url) {
   if (!url) return url;
-  // Hapus semua proxy prefix dan parameter source=true
-  return url
-    .replace('https://proxy.liyao.space/------', '')
-    .replace('https://cf.depseekelement.workers.dev/------', '')
-    .replace('https://cf.depseekelement.workers.dev/------', '')
-    .replace(/[?&]source=true(&|$)/, '')
-    .replace(/\?$/, ''); // Hapus trailing ? jika ada
+  return url;
 }
 
 // Get nonce for streaming requests
@@ -140,7 +84,8 @@ async function getNonce() {
           'referer': `${BASE_URL}/`,
           'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
-        }
+        },
+        ...(proxyAgent && { httpsAgent: proxyAgent, httpAgent: proxyAgent })
       }
     );
     return data?.data || data;
@@ -155,17 +100,17 @@ async function getEpisodeBasicData(slug) {
   try {
     const url = `${PROXY_BASE_URL}/episode/${slug}/`;
     const $ = await fetchPage(url);
-    
+
     const title = $('h1').first().text().trim() || $('.posttl').first().text().trim();
     const mainIframe = cleanUrl($('#pembed iframe').first().attr('src') || $('iframe').first().attr('src') || null);
-    
+
     // Extract mirror links
     const mirrorRaw = { m360p: [], m480p: [], m720p: [] };
     $('.mirrorstream ul').each((_, ul) => {
       const $ul = $(ul);
       const qClass = $ul.attr('class');
       let quality = '';
-      
+
       // Cek apakah class langsung seperti m360p, m480p, m720p
       if (qClass && ['m360p', 'm480p', 'm720p'].includes(qClass)) {
         quality = qClass;
@@ -176,10 +121,10 @@ async function getEpisodeBasicData(slug) {
         else if (qLower.includes('480')) quality = 'm480p';
         else if (qLower.includes('720')) quality = 'm720p';
       }
-      
+
       // Jika quality tidak ditemukan, default ke m360p
       if (!quality) quality = 'm360p';
-      
+
       if (quality && mirrorRaw[quality]) {
         $ul.find('li a').each((_, el) => {
           const $el = $(el);
@@ -191,7 +136,7 @@ async function getEpisodeBasicData(slug) {
         });
       }
     });
-    
+
     // Extract download links
     const download = {};
     $('.download ul li').each((_, li) => {
@@ -214,7 +159,7 @@ async function getEpisodeBasicData(slug) {
         });
       }
     });
-    
+
     return { title, mainIframe, mirrorRaw, download };
   } catch (error) {
     console.error('[OTAKU] getEpisodeBasicData ERROR:', error.message);
@@ -230,7 +175,7 @@ async function fetchIframeUrl(payload, nonce, slug) {
       nonce,
       action: '2a3505c93b0035d3f455df82bf976b84'
     });
-    
+
     const { data } = await axios.post(
       `${BASE_URL}/wp-admin/admin-ajax.php`,
       body.toString(),
@@ -241,12 +186,13 @@ async function fetchIframeUrl(payload, nonce, slug) {
           'referer': `${BASE_URL}/episode/${slug}/`,
           'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
-        }
+        },
+        ...(proxyAgent && { httpsAgent: proxyAgent, httpAgent: proxyAgent })
       }
     );
-    
+
     if (!data?.data) return null;
-    
+
     const html = Buffer.from(data.data, 'base64').toString('utf-8');
     const match = html.match(/src="([^"]+)"/) || html.match(/<iframe[^>]+src=[\"']?([^\"' >]+)/i);
     return match ? match[1] : null;
@@ -259,7 +205,7 @@ async function fetchIframeUrl(payload, nonce, slug) {
 // Process mirror links for streaming
 async function processMirrorLinks(mirrorRaw, nonce, slug) {
   const mirror = { m360p: [], m480p: [], m720p: [] };
-  
+
   for (const quality of Object.keys(mirrorRaw)) {
     const promises = mirrorRaw[quality].map(async (m) => {
       try {
@@ -278,10 +224,10 @@ async function processMirrorLinks(mirrorRaw, nonce, slug) {
         return { nama: m.nama, url: null, id: m.content || null, content: m.content || null };
       }
     });
-    
+
     mirror[quality] = await Promise.all(promises);
   }
-  
+
   return mirror;
 }
 
@@ -292,9 +238,9 @@ async function getEpisodeStreaming(slug) {
       getNonce(),
       getEpisodeBasicData(slug)
     ]);
-    
+
     const mirrorUrls = await processMirrorLinks(episodeData.mirrorRaw, nonce, slug);
-    
+
     return {
       title: episodeData.title,
       iframe: episodeData.mainIframe,
@@ -360,7 +306,7 @@ router.get('/anime/:slug', async (req, res) => {
     const { slug } = req.params;
     const $ = await fetchPage(`${PROXY_BASE_URL}/anime/${slug}/`);
     // --- TITLE ---
-    const titleRaw = $('.jdlrx h1').first().text().replace(/\s*Subtitle Indonesia.*/i,'').trim();
+    const titleRaw = $('.jdlrx h1').first().text().replace(/\s*Subtitle Indonesia.*/i, '').trim();
     const title = titleRaw;
     if (!title) return res.status(404).json({ error: 'Anime tidak ditemukan atau struktur halaman berubah' });
     // --- INFOZINGLE ---
@@ -396,25 +342,25 @@ router.get('/anime/:slug', async (req, res) => {
         const value = m[2].trim();
         const mapped = keyMapping[keyRaw] || keyRaw;
         info[mapped] = value;
-        if (mapped==='alternativeTitles') alternativeTitles = value;
-        if (mapped==='score') score = value;
-        if (mapped==='status') status = value;
-        if (mapped==='type') type = value;
-        if (mapped==='total_episode') total_episode = value;
-        if (mapped==='producers') producers = value;
-        if (mapped==='duration') duration = value;
-        if (mapped==='released') released = value;
-        if (mapped==='studio') studio = value;
+        if (mapped === 'alternativeTitles') alternativeTitles = value;
+        if (mapped === 'score') score = value;
+        if (mapped === 'status') status = value;
+        if (mapped === 'type') type = value;
+        if (mapped === 'total_episode') total_episode = value;
+        if (mapped === 'producers') producers = value;
+        if (mapped === 'duration') duration = value;
+        if (mapped === 'released') released = value;
+        if (mapped === 'studio') studio = value;
       }
     });
-    function safeImg(selArr) {for(const sel of selArr){let s=$(sel).attr('src');if(s)return s;}return '';}    
-    let image = safeImg(['.fotoanime img','.imganime img']);
+    function safeImg(selArr) { for (const sel of selArr) { let s = $(sel).attr('src'); if (s) return s; } return ''; }
+    let image = safeImg(['.fotoanime img', '.imganime img']);
     if (!image) image = $('.fotoanime').find('img').attr('src') || '';
     let genres = [];
-    if(info.genres){
-      genres = info.genres.split(',').map(g=>g.trim()).filter(Boolean);
+    if (info.genres) {
+      genres = info.genres.split(',').map(g => g.trim()).filter(Boolean);
       delete info.genres;
-    } else if ($(".infozingle p:contains('Genre') a").length > 0){
+    } else if ($(".infozingle p:contains('Genre') a").length > 0) {
       $(".infozingle p:contains('Genre') a").each((i, el) => genres.push($(el).text().trim()));
     }
     let synopsis = '';
@@ -429,8 +375,8 @@ router.get('/anime/:slug', async (req, res) => {
       const epTitle = anchor.text().trim();
       const link = anchor.attr('href');
       let numMatch = epTitle.match(/Episode\s+(\d+)/i) || epTitle.match(/Episode\s+(\d+)\s*\(/i);
-      let number = numMatch && numMatch[1] ? numMatch[1] : String(i+1);
-      const match = (link||'').match(/\/episode\/([^\/?#]+)/);
+      let number = numMatch && numMatch[1] ? numMatch[1] : String(i + 1);
+      const match = (link || '').match(/\/episode\/([^\/?#]+)/);
       const slug = match && match[1] ? match[1] : '';
       const date = $(el).find('.zeebr').text().trim();
       if (epTitle && slug) episodes.push({ number, title: epTitle, date, slug });
@@ -443,13 +389,13 @@ router.get('/anime/:slug', async (req, res) => {
     let episodeRange = episodes.length ? `1-${episodes.length}` : '';
     let batchData = null;
     // Cari link batch (<a href="/batch/batchid" ...>)
-    $('.episodelist .smokelister:contains("Batch")').next('ul').find('a').each((i,el)=>{
+    $('.episodelist .smokelister:contains("Batch")').next('ul').find('a').each((i, el) => {
       const href = $(el).attr('href') || '';
       const m = href.match(/\/batch\/([^\/?#]+)/);
-      if(m && m[1]) {
+      if (m && m[1]) {
         batchId = m[1];
         batchAvailable = true;
-        batchTitle = title+" Batch Subtitle Indonesia";
+        batchTitle = title + " Batch Subtitle Indonesia";
       }
     });
     if (batchId) {
@@ -532,7 +478,7 @@ router.get('/batch/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const $ = await fetchPage(`${PROXY_BASE_URL}/batch/${id}/`);
-    let title = $('.jdlrx h1').text().replace(/\s*\[BATCH\].*/i,'').replace(/subtitle indonesia/i,'').trim();
+    let title = $('.jdlrx h1').text().replace(/\s*\[BATCH\].*/i, '').replace(/subtitle indonesia/i, '').trim();
     if (!title) return res.status(404).json({ error: 'Batch tidak ditemukan atau struktur halaman berubah' });
     let episodeRange = '';
     const h2txt = $('.subheading h2').first().text();
@@ -580,22 +526,22 @@ router.get('/batch/:id', async (req, res) => {
 router.get('/episode/:slug', async (req, res) => {
   try {
     const { slug } = req.params;
-    
+
     // Get streaming data menggunakan fungsi baru
     const streamingData = await getEpisodeStreaming(slug);
-    
+
     // Get additional data dari halaman (navigasi, anime slug, dll)
     const $ = await fetchPage(`${PROXY_BASE_URL}/episode/${slug}`);
     const titleEp = streamingData.title || $('.posttl').first().text().trim();
     let number = '1', title = titleEp, date = '';
     const numMatch = titleEp.match(/Episode\s+(\d+)/i);
     if (numMatch && numMatch[1]) number = numMatch[1];
-    
+
     // Convert mirror format ke videoServers format (backward compatibility)
     const videoServers = [];
     const desuplayServers = [];
     const desustreamServers = [];
-    
+
     Object.keys(streamingData.mirror).forEach(quality => {
       const qualityUpper = quality.replace('m', '').toUpperCase();
       streamingData.mirror[quality].forEach(mirror => {
@@ -605,25 +551,25 @@ router.get('/episode/:slug', async (req, res) => {
           name: nameWithQuality,
           url: mirror.url
         };
-        
+
         // Pisahkan desuplay dan desustream untuk ditempatkan di depan
         // Cek di nama dan juga di URL (untuk handle kasus seperti "ondesu3" dengan URL desustream.info)
         const nameLower = nameWithQuality.toLowerCase();
         const urlLower = (mirror.url || '').toLowerCase();
         const namaLower = (mirror.nama || '').toLowerCase();
-        
+
         // Cek desuplay (di nama atau URL)
-        const isDesuplay = nameLower.includes('desuplay') || 
-                          urlLower.includes('desuplay') || 
-                          namaLower.includes('desuplay');
-        
+        const isDesuplay = nameLower.includes('desuplay') ||
+          urlLower.includes('desuplay') ||
+          namaLower.includes('desuplay');
+
         // Cek desustream (di nama, URL, atau domain desustream.info)
-        const isDesustream = nameLower.includes('desustream') || 
-                            urlLower.includes('desustream') || 
-                            urlLower.includes('desustream.info') ||
-                            namaLower.includes('desustream') ||
-                            namaLower.includes('ondesu'); // Handle "ondesu3" yang menggunakan desustream
-        
+        const isDesustream = nameLower.includes('desustream') ||
+          urlLower.includes('desustream') ||
+          urlLower.includes('desustream.info') ||
+          namaLower.includes('desustream') ||
+          namaLower.includes('ondesu'); // Handle "ondesu3" yang menggunakan desustream
+
         if (isDesuplay) {
           desuplayServers.push(server);
         } else if (isDesustream) {
@@ -633,7 +579,7 @@ router.get('/episode/:slug', async (req, res) => {
         }
       });
     });
-    
+
     // Gabungkan: desuplay di depan (jika ada), jika tidak ada desuplay maka desustream di depan, lalu yang lainnya
     let sortedVideoServers = [];
     if (desuplayServers.length > 0) {
@@ -643,7 +589,7 @@ router.get('/episode/:slug', async (req, res) => {
       // Jika tidak ada desuplay, desustream di urutan pertama
       sortedVideoServers = [...desustreamServers, ...videoServers];
     }
-    
+
     // Convert download format ke downloadLinks format (backward compatibility)
     const downloadLinks = [];
     Object.keys(streamingData.download).forEach(quality => {
@@ -660,7 +606,7 @@ router.get('/episode/:slug', async (req, res) => {
         });
       }
     });
-    
+
     // --- Anime Slug ---
     let animeSlug = '';
     const allEps = $(".flir a:contains('See All Episodes')").attr('href') || '';
@@ -668,7 +614,7 @@ router.get('/episode/:slug', async (req, res) => {
       const m = allEps.match(/\/anime\/([^\/]+)/);
       if (m && m[1]) animeSlug = m[1];
     }
-    
+
     // --- Navigasi episode ---
     let prevEpisode = null, nextEpisode = null;
     const $navs = $('.flir a');
@@ -685,7 +631,7 @@ router.get('/episode/:slug', async (req, res) => {
         if (m && m[1]) nextEpisode = m[1];
       }
     });
-    
+
     const episode = {
       number,
       title,
@@ -772,29 +718,29 @@ router.get('/anime-list', async (req, res) => {
   try {
     // Scraping dari HTML
     const $ = await fetchPage(`${PROXY_BASE_URL}/anime-list/`);
-    
+
     // Objek untuk menyimpan anime berdasarkan abjad
     const animeByAlphabet = {};
-    const alphabets = ['#', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 
-                      'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'];
-    
+    const alphabets = ['#', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+      'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'];
+
     // Initialize all alphabet buckets
     alphabets.forEach(letter => {
       animeByAlphabet[letter] = [];
     });
-    
+
     // Coba berbagai selector untuk menemukan daftar anime
     // Selector 1: Struktur seperti layarotaku/sokuja (.blix)
     $('.blix').each((i, el) => {
       const alphabetElement = $(el).find('span a');
       const alphabet = alphabetElement.text().trim();
-      
+
       if (alphabet && alphabet.length === 1) {
         $(el).find('li').each((j, item) => {
           const link = $(item).find('a');
           const title = link.text().trim();
           const href = link.attr('href');
-          
+
           let slug = '';
           if (href) {
             const slugMatch = href.match(/\/anime\/([^\/]+)/);
@@ -802,7 +748,7 @@ router.get('/anime-list', async (req, res) => {
               slug = slugMatch[1];
             }
           }
-          
+
           if (title && slug) {
             const firstChar = title.charAt(0).toUpperCase();
             const key = /[A-Z]/.test(firstChar) ? firstChar : '#';
@@ -813,14 +759,14 @@ router.get('/anime-list', async (req, res) => {
         });
       }
     });
-    
+
     // Selector 2: Struktur alternatif - cari semua link ke /anime/
     if (Object.values(animeByAlphabet).every(arr => arr.length === 0)) {
       $('a[href*="/anime/"]').each((i, el) => {
         const $el = $(el);
         const href = $el.attr('href');
         const title = $el.text().trim();
-        
+
         if (href && title) {
           const slugMatch = href.match(/\/anime\/([^\/]+)/);
           if (slugMatch && slugMatch[1]) {
@@ -841,14 +787,14 @@ router.get('/anime-list', async (req, res) => {
         }
       });
     }
-    
+
     // Selector 3: Cari di dalam container umum
     if (Object.values(animeByAlphabet).every(arr => arr.length === 0)) {
       $('.venser, .venkonten, .content, main, article').find('a[href*="/anime/"]').each((i, el) => {
         const $el = $(el);
         const href = $el.attr('href');
         const title = $el.text().trim();
-        
+
         if (href && title && !href.includes('/episode/') && !href.includes('/batch/')) {
           const slugMatch = href.match(/\/anime\/([^\/]+)/);
           if (slugMatch && slugMatch[1]) {
@@ -867,16 +813,16 @@ router.get('/anime-list', async (req, res) => {
         }
       });
     }
-    
+
     // Hitung total anime
     let total = 0;
     Object.keys(animeByAlphabet).forEach(key => {
       total += animeByAlphabet[key].length;
     });
-    
+
     // Sort alphabets - hanya ambil yang memiliki anime
     const sortedAlphabets = alphabets.filter(a => animeByAlphabet[a] && animeByAlphabet[a].length > 0);
-    
+
     // Return the formatted response (mengikuti struktur layarwibu.js)
     res.json({
       animeByAlphabet,
