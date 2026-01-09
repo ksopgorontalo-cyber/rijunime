@@ -98,7 +98,7 @@ async function getNonce() {
 // Get basic episode data
 async function getEpisodeBasicData(slug) {
   try {
-    const url = `${PROXY_BASE_URL}/episode/${slug}/`;
+    const url = `${BASE_URL}/episode/${slug}/`;
     const $ = await fetchPage(url);
 
     const title = $('h1').first().text().trim() || $('.posttl').first().text().trim();
@@ -268,7 +268,7 @@ async function resolveOtakuIframeUrl(dataContentBase64, refererUrl = null) {
 // 1. Endpoint jadwal rilis anime
 router.get('/schedule', async (req, res) => {
   try {
-    const $ = await fetchPage(`${PROXY_BASE_URL}/jadwal-rilis/`);
+    const $ = await fetchPage(`${BASE_URL}/jadwal-rilis/`);
     const schedule = [];
     $('.kglist321').each((i, dayElem) => {
       const day = $(dayElem).find('h2').text().trim();
@@ -304,7 +304,7 @@ router.get('/schedule', async (req, res) => {
 router.get('/anime/:slug', async (req, res) => {
   try {
     const { slug } = req.params;
-    const $ = await fetchPage(`${PROXY_BASE_URL}/anime/${slug}/`);
+    const $ = await fetchPage(`${BASE_URL}/anime/${slug}/`);
     // --- TITLE ---
     const titleRaw = $('.jdlrx h1').first().text().replace(/\s*Subtitle Indonesia.*/i, '').trim();
     const title = titleRaw;
@@ -477,7 +477,7 @@ router.get('/anime/:slug', async (req, res) => {
 router.get('/batch/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const $ = await fetchPage(`${PROXY_BASE_URL}/batch/${id}/`);
+    const $ = await fetchPage(`${BASE_URL}/batch/${id}/`);
     let title = $('.jdlrx h1').text().replace(/\s*\[BATCH\].*/i, '').replace(/subtitle indonesia/i, '').trim();
     if (!title) return res.status(404).json({ error: 'Batch tidak ditemukan atau struktur halaman berubah' });
     let episodeRange = '';
@@ -531,7 +531,7 @@ router.get('/episode/:slug', async (req, res) => {
     const streamingData = await getEpisodeStreaming(slug);
 
     // Get additional data dari halaman (navigasi, anime slug, dll)
-    const $ = await fetchPage(`${PROXY_BASE_URL}/episode/${slug}`);
+    const $ = await fetchPage(`${BASE_URL}/episode/${slug}`);
     const titleEp = streamingData.title || $('.posttl').first().text().trim();
     let number = '1', title = titleEp, date = '';
     const numMatch = titleEp.match(/Episode\s+(\d+)/i);
@@ -654,7 +654,7 @@ router.get('/episode/:slug/mirror', async (req, res) => {
   try {
     const { slug } = req.params;
     const mirrorIdx = parseInt(req.query.mirror) || 0;
-    const $ = await fetchPage(`${PROXY_BASE_URL}/episode/${slug}`);
+    const $ = await fetchPage(`${BASE_URL}/episode/${slug}`);
     // Ambil mirrorstream mirror ke-n
     let found = null;
     let foundName = '';
@@ -682,7 +682,7 @@ router.get('/episode/:slug/mirror', async (req, res) => {
 router.get('/genres', async (req, res) => {
   try {
     // TODO: Cek selector genre Otakudesu
-    const $ = await fetchPage(`${PROXY_BASE_URL}/genres/`);
+    const $ = await fetchPage(`${BASE_URL}/genres/`);
     const genres = [];
     res.json(genres);
   } catch (err) {
@@ -696,7 +696,7 @@ router.get('/genres/:genre', async (req, res) => {
     // TODO: Cek selector, struktur list Otakudesu
     const { genre } = req.params;
     const page = parseInt(req.query.page) || 1;
-    const $ = await fetchPage(`${PROXY_BASE_URL}/genres/${genre}?page=${page}`);
+    const $ = await fetchPage(`${BASE_URL}/genres/${genre}?page=${page}`);
     const animeList = [];
     res.json({ genre, animeList });
   } catch (err) {
@@ -717,7 +717,7 @@ router.get('/server-url', async (req, res) => {
 router.get('/anime-list', async (req, res) => {
   try {
     // Scraping dari HTML
-    const $ = await fetchPage(`${PROXY_BASE_URL}/anime-list/`);
+    const $ = await fetchPage(`${BASE_URL}/anime-list/`);
 
     // Objek untuk menyimpan anime berdasarkan abjad
     const animeByAlphabet = {};
