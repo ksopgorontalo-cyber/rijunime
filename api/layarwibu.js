@@ -856,4 +856,167 @@ router.get('/all-anime', async (req, res) => {
   }
 });
 
+// Cache untuk menyimpan hasil completed anime
+let completedAnimeCache = {
+  data: null,
+  timestamp: 0,
+  ttl: 10 * 60 * 1000 // 10 menit cache
+};
+
+// 11. Endpoint completed anime - mengambil SEMUA anime yang sudah tamat tanpa pagination
+// Query params:
+// - limit: maksimal jumlah halaman (default: semua, contoh: ?limit=5 untuk 5 halaman pertama)
+// - refresh: true untuk bypass cache (contoh: ?refresh=true)
+router.get('/completed', async (req, res) => {
+  try {
+    const pageLimit = parseInt(req.query.limit) || 0; // 0 = tanpa limit
+    const forceRefresh = req.query.refresh === 'true';
+
+    // Cek cache (jika tidak force refresh dan tidak ada limit khusus)
+    if (!forceRefresh && pageLimit === 0 && completedAnimeCache.data &&
+      (Date.now() - completedAnimeCache.timestamp) < completedAnimeCache.ttl) {
+      console.log('[LAYARWIBU] Returning cached completed anime data');
+      return res.json({
+        total: completedAnimeCache.data.length,
+        anime: completedAnimeCache.data,
+        cached: true,
+        cacheAge: Math.round((Date.now() - completedAnimeCache.timestamp) / 1000) + 's'
+      });
+    }
+
+    // Fungsi untuk scrape satu halaman
+    async function scrapePage(pageNum) {
+      const url = pageNum === 1
+        ? `${BASE_URL}/complete-anime/`
+        : `${BASE_URL}/complete-anime/page/${pageNum}/`;
+
+      const $ = await fetchPage(url);
+      const animeOnPage = [];
+
+      // Selector untuk daftar anime complete
+      $('.venz ul li, .detpost, .rapi').find('a[href*="/anime/"]').each((i, el) => {
+        const $el = $(el);
+        const href = $el.attr('href');
+        const title = $el.text().trim();
+
+        if (href && title && title.length > 2) {
+          const slugMatch = href.match(/\/anime\/([^\/]+)/);
+          if (slugMatch && slugMatch[1]) {
+            const slug = slugMatch[1];
+            const exists = animeOnPage.some(item => item.slug === slug);
+            if (!exists) {
+              animeOnPage.push({ title, slug });
+            }
+          }
+        }
+      });
+
+      // Fallback selector
+      if (animeOnPage.length === 0) {
+        $('a[href*="/anime/"]').each((i, el) => {
+          const $el = $(el);
+          const href = $el.attr('href');
+          const title = $el.text().trim();
+
+          if (href && title && title.length > 2 &&
+            !href.includes('/episode/') && !href.includes('/batch/') &&
+            !title.toLowerCase().includes('home') &&
+            !title.toLowerCase().includes('anime list')) {
+            const slugMatch = href.match(/\/anime\/([^\/]+)/);
+            if (slugMatch && slugMatch[1]) {
+              const slug = slugMatch[1];
+              const exists = animeOnPage.some(item => item.slug === slug);
+              if (!exists) {
+                animeOnPage.push({ title, slug });
+              }
+            }
+          }
+        });
+      }
+
+      // Cek halaman berikutnya
+      const nextPageLink = $('.pagination a, .pagenavix a, .hpage a').filter((i, el) => {
+        const text = $(el).text().toLowerCase();
+        const href = $(el).attr('href') || '';
+        return text.includes('next') || text.includes('»') || text.includes('›') ||
+          href.includes(`page/${pageNum + 1}`);
+      });
+
+      return {
+        anime: animeOnPage,
+        hasNext: nextPageLink.length > 0
+      };
+    }
+
+    // PARALLEL FETCHING - fetch beberapa halaman sekaligus untuk kecepatan
+    const BATCH_SIZE = 5; // Fetch 5 halaman sekaligus
+    const MAX_PAGES = pageLimit > 0 ? pageLimit : 100;
+    const allAnime = [];
+    let currentBatch = 1;
+    let continueLoop = true;
+
+    while (continueLoop) {
+      const startPage = (currentBatch - 1) * BATCH_SIZE + 1;
+      const endPage = Math.min(startPage + BATCH_SIZE - 1, MAX_PAGES);
+
+      const pagesToFetch = [];
+      for (let p = startPage; p <= endPage; p++) {
+        pagesToFetch.push(p);
+      }
+
+      console.log(`[LAYARWIBU] Fetching completed anime pages ${startPage}-${endPage} in parallel...`);
+
+      const results = await Promise.allSettled(
+        pagesToFetch.map(pageNum => scrapePage(pageNum))
+      );
+
+      let anyHasNext = false;
+      let anySuccess = false;
+
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        if (result.status === 'fulfilled') {
+          anySuccess = true;
+          const pageData = result.value;
+
+          pageData.anime.forEach(anime => {
+            const exists = allAnime.some(item => item.slug === anime.slug);
+            if (!exists) {
+              allAnime.push(anime);
+            }
+          });
+
+          if (pageData.hasNext) {
+            anyHasNext = true;
+          }
+        }
+      }
+
+      if (!anyHasNext || !anySuccess || endPage >= MAX_PAGES) {
+        continueLoop = false;
+      } else {
+        currentBatch++;
+      }
+    }
+
+    console.log(`[LAYARWIBU] Total completed anime fetched: ${allAnime.length}`);
+
+    // Simpan ke cache (hanya jika fetch semua tanpa limit)
+    if (pageLimit === 0) {
+      completedAnimeCache.data = allAnime;
+      completedAnimeCache.timestamp = Date.now();
+    }
+
+    res.json({
+      total: allAnime.length,
+      anime: allAnime,
+      cached: false
+    });
+  } catch (err) {
+    console.error('[LAYARWIBU] Error fetching completed anime:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
+
