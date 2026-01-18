@@ -49,6 +49,7 @@ app.get('/', (req, res) => {
         episode: '/layarwibu/episode/:slug',
         schedule: '/layarwibu/schedule',
         animeList: '/layarwibu/anime-list',
+        completed: '/layarwibu/completed',
         search: '/layarwibu/search?q=query&page=1',
         batch: '/layarwibu/batch/:id',
         genres: '/layarwibu/genres',
@@ -96,7 +97,7 @@ app.use('/otakudesu', otakudesuRouter);
 // Error handler middleware
 app.use((err, req, res, next) => {
   console.error('API Error:', err);
-  
+
   // Track error dengan context
   trackError(err, {
     route: req.route ? req.route.path : req.path,
@@ -104,7 +105,7 @@ app.use((err, req, res, next) => {
     userAgent: req.get('User-Agent'),
     ip: req.ip
   });
-  
+
   // Handle specific errors
   if (err.message.includes('403')) {
     return res.status(403).json({
@@ -112,19 +113,19 @@ app.use((err, req, res, next) => {
       retryAfter: 60
     });
   }
-  
+
   if (err.message.includes('404')) {
     return res.status(404).json({
       error: 'The requested content was not found.'
     });
   }
-  
+
   if (err.code === 'ECONNABORTED') {
     return res.status(504).json({
       error: 'Request timeout. Please try again.'
     });
   }
-  
+
   // Default error response
   res.status(500).json({
     error: 'An error occurred while processing your request.',
